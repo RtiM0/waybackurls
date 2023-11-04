@@ -27,6 +27,9 @@ func main() {
 	var getVersionsFlag bool
 	flag.BoolVar(&getVersionsFlag, "get-versions", false, "list URLs for crawled versions of input URL(s)")
 
+	var proxyFlag string
+	flag.StringVar(&proxyFlag, "p", "", "comma separated list of proxies")
+
 	flag.Parse()
 
 	if flag.NArg() > 0 {
@@ -58,6 +61,19 @@ func main() {
 
 		return
 	}
+
+	var proxies []*url.URL
+	if proxyFlag != "" {
+		for _, p := range strings.Split(proxyFlag, ",") {
+			u, err := url.Parse(p)
+			if err != nil {
+				continue
+			}
+			proxies = append(proxies, u)
+		}
+	}
+
+	initHTTPClient(proxies)
 
 	fetchFns := []fetchFn{
 		getWaybackURLs,
@@ -124,13 +140,33 @@ type wurl struct {
 
 type fetchFn func(string, bool) ([]wurl, error)
 
+var client *http.Client
+
+func initHTTPClient(proxies []*url.URL) {
+	client = &http.Client{
+		Transport: &http.Transport{
+			Proxy: func(req *http.Request) (*url.URL, error) {
+				if len(proxies) == 0 {
+					return nil, nil
+				}
+				proxy := proxies[0]
+				proxies = proxies[1:]
+				if len(proxies) == 0 {
+					proxies = append(proxies, proxy)
+				}
+				return proxy, nil
+			},
+		},
+	}
+}
+
 func getWaybackURLs(domain string, noSubs bool) ([]wurl, error) {
 	subsWildcard := "*."
 	if noSubs {
 		subsWildcard = ""
 	}
 
-	res, err := http.Get(
+	res, err := client.Get(
 		fmt.Sprintf("http://web.archive.org/cdx/search/cdx?url=%s%s/*&output=json&collapse=urlkey", subsWildcard, domain),
 	)
 	if err != nil {
@@ -170,7 +206,7 @@ func getCommonCrawlURLs(domain string, noSubs bool) ([]wurl, error) {
 		subsWildcard = ""
 	}
 
-	res, err := http.Get(
+	res, err := client.Get(
 		fmt.Sprintf("http://index.commoncrawl.org/CC-MAIN-2018-22-index?url=%s%s/*&output=json", subsWildcard, domain),
 	)
 	if err != nil {
@@ -217,7 +253,7 @@ func getVirusTotalURLs(domain string, noSubs bool) ([]wurl, error) {
 		domain,
 	)
 
-	resp, err := http.Get(fetchURL)
+	resp, err := client.Get(fetchURL)
 	if err != nil {
 		return out, err
 	}
@@ -257,7 +293,7 @@ func isSubdomain(rawUrl, domain string) bool {
 func getVersions(u string) ([]string, error) {
 	out := make([]string, 0)
 
-	resp, err := http.Get(fmt.Sprintf(
+	resp, err := client.Get(fmt.Sprintf(
 		"http://web.archive.org/cdx/search/cdx?url=%s&output=json", u,
 	))
 
